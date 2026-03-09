@@ -1,5 +1,0 @@
-stage,stage_date_range,stage_weight,stage_score_0_100,weighted_stage_score,CYI
-preparation,2025-03-01 to 2025-04-30,0.2,32.0,6.4,68.2
-planting,2025-05-01 to 2025-05-31,0.2,45.0,9.0,68.2
-vegetative,2025-06-01 to 2025-08-31,0.4,100.0,40.0,68.2
-harvest,2025-09-01 to 2025-10-31,0.2,64.0,12.8,68.2

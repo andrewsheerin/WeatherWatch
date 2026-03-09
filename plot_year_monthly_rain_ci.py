@@ -1,6 +1,9 @@
 from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
+import calendar
+from matplotlib.ticker import FixedLocator, NullFormatter, FixedFormatter
+from matplotlib.patches import Patch
 
 
 def plot_monthly_rain_ci(
@@ -35,14 +38,37 @@ def plot_monthly_rain_ci(
     df_plot["ci_upper"] = df_plot["monthly_mean_mm"] + 1.96 * df_plot["monthly_std_mm"]
     df_plot["ci_lower"] = df_plot["ci_lower"].clip(lower=0)
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(8, 4.5))
     fig.patch.set_facecolor("white")
-    ax.set_facecolor("#f8f8f8")
+    ax.set_facecolor("white")
+
+    def _month_x(mmdd: str) -> float:
+        dt = pd.Timestamp(f"{title_year}-{mmdd}")
+        days_in_month = calendar.monthrange(dt.year, dt.month)[1]
+        frac = (dt.day - 1) / days_in_month
+        return (dt.month - 1) + frac
+
+    stage_colors = {
+        "Preparation": "#e6e0f3",
+        "Planting": "#dcebdc",
+        "Vegetative": "#dbe7f6",
+        "Harvest": "#f3e2d7",
+    }
+    stage_spans = [
+        ("Preparation", _month_x("03-15"), _month_x("05-15")),
+        ("Planting", _month_x("05-16"), _month_x("06-30")),
+        ("Vegetative", _month_x("07-01"), _month_x("09-15")),
+        ("Harvest", _month_x("09-16"), _month_x("11-15")),
+    ]
+
+    for name, start_x, end_x in stage_spans:
+        ax.axvspan(start_x, end_x, color=stage_colors[name], alpha=0.5, zorder=0)
 
     months = df_plot["month"]
+    x = months - 0.5
 
     ax.fill_between(
-        months,
+        x,
         df_plot["ci_lower"],
         df_plot["ci_upper"],
         color="gray",
@@ -51,7 +77,7 @@ def plot_monthly_rain_ci(
     )
 
     ax.plot(
-        months,
+        x,
         df_plot["monthly_mean_mm"],
         linestyle="--",
         color="black",
@@ -60,21 +86,43 @@ def plot_monthly_rain_ci(
     )
 
     ax.bar(
-        months,
+        x,
         df_plot["rain_year_mm"],
         color="#3b6fa5",
         alpha=0.95,
-        label=f"{title_year} Total"
+        label=f"Monthly Total"
     )
 
-    ax.set_title(f"Monthly Rainfall vs Baseline ({title_year})")
+    ax.set_title(f"Monthly Rainfall vs 30-year Baseline \n Tamale, Ghana (2025)", y=1.08)
     ax.set_xlabel("Month")
     ax.set_ylabel("Rainfall (mm)")
-    ax.set_xticks(range(1, 13))
+
+    ax.set_xlim(0, 12)
+    month_boundaries = list(range(0, 13))
+    month_mids = [m + 0.5 for m in range(0, 12)]
+
+    ax.xaxis.set_major_locator(FixedLocator(month_boundaries))
+    ax.xaxis.set_major_formatter(NullFormatter())
+    ax.xaxis.set_minor_locator(FixedLocator(month_mids))
+    ax.xaxis.set_minor_formatter(FixedFormatter([calendar.month_abbr[i] for i in range(1, 13)]))
+    ax.tick_params(axis="x", which="minor", length=0, pad=6)
+    ax.tick_params(axis="x", which="major", length=4)
+
     ax.set_axisbelow(True)
     ax.grid(True, alpha=0.8)
 
-    ax.legend(frameon=False)
+    data_legend = ax.legend(frameon=False)
+    ax.add_artist(data_legend)
+
+    stage_handles = [Patch(facecolor=stage_colors[name], edgecolor="none", label=name) for name, _, _ in stage_spans]
+    ax.legend(
+        handles=stage_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.10),
+        ncol=4,
+        frameon=False,
+    )
+
     plt.tight_layout()
     plt.savefig(out_plot, dpi=160)
     plt.close()

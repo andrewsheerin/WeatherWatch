@@ -20,7 +20,7 @@ def run() -> None:
     baseline_end = 2025
     target_year = 2025
 
-    download_data = False
+    download_data = True
     start_date = "1995-01-01"
     end_date = "2025-12-31"
 
@@ -88,10 +88,10 @@ def run() -> None:
     metrics_csv = csv_dir / f"daily_metrics_{target_year}.csv"
     compute_daily_metrics(
         input_csv=year_csv,
-        clim_mean_csv=daily_mean_csv,
+        baseline_csv=all_daily_csv,
         output_csv=metrics_csv,
         dry_threshold_mm=1.0,
-        heat_threshold_C=35.0,
+        heat_threshold_C=33.0,
         windows=(7, 30),
     )
 

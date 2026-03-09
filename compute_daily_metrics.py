@@ -6,8 +6,8 @@
 # Assumes input daily CSV columns:
 #   date, tmax_C, tmin_C, precip_mm, rh_max_pct, rh_min_pct, solar_MJ_m2
 #
-# Assumes climatology mean CSV produced by compute_daily_climatology.py contains:
-#   doy, precip_mm, (and other vars; only precip_mm is required here)
+# Assumes baseline CSV contains daily precip for multiple years:
+#   date, precip_mm
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def _compute_dry_streak(dry_flag: pd.Series) -> pd.Series:
 
 def compute_daily_metrics(
     input_csv: Path,
-    clim_mean_csv: Path,
+    baseline_csv: Path,
     output_csv: Path,
     dry_threshold_mm: float = 1.0,
     heat_threshold_C: float = 35.0,
@@ -68,6 +68,7 @@ def compute_daily_metrics(
     df = _drop_feb29(df)
     df = df.sort_values("date").reset_index(drop=True)
     df["doy"] = df["date"].dt.dayofyear
+    original_cols = list(df.columns)
 
     required = {"tmax_C", "tmin_C", "precip_mm"}
     missing = required - set(df.columns)
@@ -91,44 +92,74 @@ def compute_daily_metrics(
     df["heat_30_count"] = df["heat_day_35C"].rolling(window=30, min_periods=1).sum().astype(int)
 
     # --- Climatology baselines (by DOY) ---
-    clim = pd.read_csv(clim_mean_csv)
-    if "doy" not in clim.columns or "precip_mm" not in clim.columns:
-        raise ValueError("Climatology mean CSV must include columns: doy, precip_mm")
+    baseline = pd.read_csv(baseline_csv, parse_dates=["date"])
+    baseline = _drop_feb29(baseline)
+    baseline = baseline.sort_values("date").reset_index(drop=True)
 
-    clim = clim.copy()
-    clim = clim[~clim["doy"].isna()]
-    clim["doy"] = clim["doy"].astype(int)
+    if "precip_mm" not in baseline.columns:
+        raise ValueError("Baseline CSV missing column: precip_mm")
 
-    # Ensure we have a full 1..365 set; if not, fill by reindex + interpolate
-    clim = clim.sort_values("doy").set_index("doy")
-    clim = clim.reindex(range(1, 366))
+    baseline["year"] = baseline["date"].dt.year
+    baseline["doy"] = baseline["date"].dt.dayofyear
 
-    # Interpolate precip mean if there are gaps
-    clim["precip_mm"] = clim["precip_mm"].astype(float).interpolate(limit_direction="both")
-    precip_mean_365 = clim["precip_mm"].to_numpy()
+    # Rolling precip totals per year, then climatology median by DOY
+    for w in windows:
+        roll = (
+            baseline.groupby("year")["precip_mm"]
+            .rolling(window=w, min_periods=1)
+            .sum()
+            .reset_index(level=0, drop=True)
+        )
+        baseline[f"p{w}_mm"] = roll
 
-    # Trailing-window climatology totals ending on each DOY
-    clim_p7 = _circular_trailing_sum(precip_mean_365, 7)
-    clim_p30 = _circular_trailing_sum(precip_mean_365, 30)
-
-    clim_out = pd.DataFrame(
-        {
-            "doy": np.arange(1, 366, dtype=int),
-            "precip_clim_daily_mean_mm": precip_mean_365,
-            "p7_clim_mm": clim_p7,
-            "p30_clim_mm": clim_p30,
-        }
+    doy_index = pd.Index(range(1, 366), name="doy")
+    precip_daily_med = (
+        baseline.groupby("doy")["precip_mm"].median().reindex(doy_index)
     )
+    precip_daily_med = precip_daily_med.astype(float).interpolate(limit_direction="both")
+
+    clim_out = pd.DataFrame({
+        "doy": np.arange(1, 366, dtype=int),
+        "precip_clim_daily_median_mm": precip_daily_med.to_numpy(),
+    })
+
+    for w in windows:
+        clim_roll = baseline.groupby("doy")[f"p{w}_mm"].median().reindex(doy_index)
+        clim_roll = clim_roll.astype(float).interpolate(limit_direction="both")
+        if np.nanmin(clim_roll.to_numpy()) < 5.0:
+            print(f"Warning: p{w}_clim_mm has very low values (<5 mm). Check baseline data.")
+        clim_out[f"p{w}_clim_mm"] = clim_roll.to_numpy()
 
     df = df.merge(clim_out, on="doy", how="left")
 
     # Percent of normal + anomaly (30d and 7d)
-    eps = 1e-9
+    eps = 1e-6
     df["p30_pct_of_normal"] = (df["p30_mm"] / (df["p30_clim_mm"] + eps)) * 100.0
     df["p30_anom_pct"] = (df["p30_mm"] - df["p30_clim_mm"]) / (df["p30_clim_mm"] + eps)
 
     df["p7_pct_of_normal"] = (df["p7_mm"] / (df["p7_clim_mm"] + eps)) * 100.0
     df["p7_anom_pct"] = (df["p7_mm"] - df["p7_clim_mm"]) / (df["p7_clim_mm"] + eps)
+
+    df = df.rename(columns={
+        "dry_streak_days": "dry_streak",
+        "p30_anom_pct": "p30_anomaly_pct",
+    })
+
+    keep_cols = (
+        original_cols +
+        [
+            "p7_mm",
+            "p30_mm",
+            "dry_day",
+            "dry_streak",
+            "heat_day_35C",
+            "p30_pct_of_normal",
+            "p30_anomaly_pct",
+        ]
+    )
+    seen = set()
+    keep_cols = [c for c in keep_cols if not (c in seen or seen.add(c))]
+    df = df[keep_cols]
 
     df.to_csv(output_csv, index=False)
     print(f"Saved daily metrics to: {output_csv}")
